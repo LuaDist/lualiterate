@@ -40,18 +40,17 @@ local function extractCodeNodes(ast)
     --]]
     for i,v in ipairs(ast) do
         --^ `filter comments`
-        if v.key == "COMMENT" and v.parsed.Literate then
-            if v.parsed.Literate[1].type ~= "lp" then
-                table.insert(doc_blocks, { doc = "", code = ""})
+        if v.key == "COMMENT" and v.parsed.style == "literate" then
+            table.insert(doc_blocks, { doc = "", code = ""})
+            if v.parsed.type == "lp" or v.parsed.type == "markdown" then
+                doc_blocks[#doc_blocks].doc = { str = v.parsed.text, type = v.parsed.type }
             end
-            if v.parsed.Literate[1].type == "lp" or v.parsed.Literate[1].type == "markdown" then
-                doc_blocks[#doc_blocks].doc = { str = v.parsed.Literate[1].text, type = v.parsed.Literate[1].type }
-            end
-        elseif v.key == "COMMENT" and v.parsed.Custom then
-            if v.parsed.Custom.type == "startblock" then
-                table.insert(doc_blocks, { doc = { str = "<strong>"..v.parsed.Custom.block.."</strong><br/>"..v.parsed.Custom.text, type = v.parsed.Custom.type }, code = ""})
-            elseif v.parsed.Custom.type == "endblock" then
-                table.insert(doc_blocks, { doc = { str = "end of <strong>"..(v.parsed.Custom.block or "").."</strong> block", type = v.parsed.Custom.type }, code = ""})
+        elseif v.key == "COMMENT" and v.parsed.style == "custom" then
+            if v.parsed.type == "startblock" then
+                table.insert(doc_blocks, { doc = { str = "<strong>"..v.parsed.block.."</strong><br/>"..v.parsed.text, type = v.parsed.type }, code = ""})
+            elseif v.parsed.type == "endblock" then
+                table.insert(doc_blocks, { doc = { str = "end of <strong>"..(v.parsed.block or "").."</strong> block", type = v.parsed.type }, code = ""})
+                table.insert(doc_blocks, { doc ={}, code = "" })
             end
         --v
         elseif type(v) == "table" and #v > 0 then
@@ -70,7 +69,7 @@ local block_comments_count = 0
 
 local function block_comments_class()
     if #block_comments_stack == 0 then
-        return ""
+        return nil
     end
     --^ `chaining class` This creates class string for HTML begining with "block_comment" and adds block# for each block comment level above current
     local class = "block_comment"
@@ -86,25 +85,33 @@ local function ASTtoHTML(ast)
     local class
     extractCodeNodes(ast)
     --dumpTree(ast)
-    dumpTree(doc_blocks)
+    --dumpTree(doc_blocks)
     html = "<table>"
     for _,v in ipairs(doc_blocks) do
         if v.doc.type == "startblock" then
             block_comments_count = block_comments_count + 1
             table.insert(block_comments_stack, block_comments_count)
-        elseif v.doc.type == "endblock" then
-            table.remove(block_comments_stack)
+            html = html .. '<tr class="folder '..block_comments_class()..'"><td class="docs">~v~ hidden block ~v~</td><td class="code"></td></tr>'
         elseif v.doc.type == "markdown" then
             v.doc.str = markdown(v.doc.str)
         end
+
         class = block_comments_class()
-        html = html .. '<tr class="'.. class ..'"><td class="docs">'
+        if class then
+            html = html .. '<tr class="'.. class ..'"><td class="docs">'
+        else
+            html = html .. '<tr><td class="docs">'
+        end
         html = html .. (v.doc.str or "")
         html = html .. '</td><td class="code">'
         html = html .. "<pre class=\"highlighted_code\">"
         html = html .. lxsh.highlighters.lua(v.code, { formatter = lxsh.formatters.html, external = true })
         html = html .. "</pre>"
         html = html .. "</td></tr>"
+
+        if v.doc.type == "endblock" then
+            table.remove(block_comments_stack)
+        end
     end
     html = html .. "</table>"
     return html
@@ -145,6 +152,7 @@ end
 function literate(ast)
     doc_blocks = {}
     findFunctions(ast)
+    --_ Reset doc_blocks table for each source file
     table.insert(doc_blocks, { doc = "", code = "" })
     return ASTtoHTML(ast)
 end
