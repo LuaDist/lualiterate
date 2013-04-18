@@ -28,6 +28,9 @@ The table has following structure:
 local doc_blocks = {}
 local functions = {}
 
+local last_docstring
+local last_stat
+
 ------------------------------------------------------------------------
 -- This function prepares table with separated documentation and code parts,
 -- that will be used to generate HTML output
@@ -41,7 +44,9 @@ local function extractCodeNodes(ast)
     for i,v in ipairs(ast) do
         --^ `filter comments`
         if v.key == "COMMENT" and v.parsed.style == "literate" then
-            table.insert(doc_blocks, { doc = "", code = ""})
+            if last_docstring ~= v.parsed.text then
+                table.insert(doc_blocks, { doc = "", code = ""})
+            end
             if v.parsed.type == "lp" or v.parsed.type == "markdown" then
                 doc_blocks[#doc_blocks].doc = { str = v.parsed.text, type = v.parsed.type }
             end
@@ -56,10 +61,23 @@ local function extractCodeNodes(ast)
         elseif type(v) == "table" and #v > 0 then
             if (v['key'] == "GlobalFunction" or v['key'] == "LocalFunction") and v.docstring then
                 table.insert(doc_blocks, { doc = "", code = ""})
+                last_stat = "FunctionDef"
+            elseif v['key'] == "FunctionCall" then
+                last_stat = "FunctionCall"
+            elseif v['key'] == "GlobalFunction" or v['key'] == "LocalFunction" then
+                last_stat = "FunctionDef"
             end
             extractCodeNodes(v)
         else
-            doc_blocks[#doc_blocks].code = doc_blocks[#doc_blocks].code .. v['str']
+            if v['key'] == "ID" and last_stat == "FunctionCall" then
+                doc_blocks[#doc_blocks].code = doc_blocks[#doc_blocks].code .. "--[[|link "..v['str'].."|]]"..v['str'].."--[[||]]"
+                last_stat = nil
+            elseif v['key'] == "ID" and last_stat == "FunctionDef" then
+                doc_blocks[#doc_blocks].code = doc_blocks[#doc_blocks].code .. "--[[|anchor "..v['str'].."|]]"..v['str']
+                last_stat = nil
+            else
+                doc_blocks[#doc_blocks].code = doc_blocks[#doc_blocks].code .. v['str']
+            end
         end
     end
 end
@@ -78,6 +96,17 @@ local function block_comments_class()
     end
     --v `chaining class`
     return class
+end
+
+local function replaceLinks(html)
+    local html = html
+    for k,v in pairs(functions) do
+        html = html:gsub('<span class="comment">%-%-%[%[%|link '..k..'%|%]%]</span>', '<a href="#'.. k ..'" title="'..(v.node.docstring or "")..'">')
+        html = html:gsub('<span class="comment">%-%-%[%[%|anchor '..k..'%|%]%]</span>', '<a name="'.. k ..'"></a>')
+    end
+    html = html:gsub('<span class="comment">%-%-%[%[%|%|%]%]</span>', '</a>')
+    html = html:gsub('<span class="comment">%-%-%[%[%|link [a-z]*%|%]%]</span>', '')
+    return html
 end
 
 local function ASTtoHTML(ast)
@@ -114,20 +143,19 @@ local function ASTtoHTML(ast)
         end
     end
     html = html .. "</table>"
-    return html
+    return replaceLinks(html)
 end
 
 local search_docstring = false
 local inline = ""
 
-local last_stat = nil
 local search_funcname = false
+local func_node
 ------------------------------------------------------------------------
 -- Function looking for comments and function definitions
 -- @name findCommentsAndFunctions
 -- @param ast - AST to extend
 local function findFunctions(ast)
-    local res, func_node
 
     for i,v in ipairs(ast) do
         if v.key == "GlobalFunction" or v.key == "LocalFunction" then
