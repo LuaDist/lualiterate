@@ -10,9 +10,10 @@ local re = require "re"
 local scanner = require "leg.scanner"
 local parser = require "leg.parser"
 local highlighter = require "luapretty.highlighter"
+local ast_helper = require "luapretty.ast_helper"
 local util = require "literate.util"
-local lxsh = require "lxsh"
 local luacomments = require "comments"
+local luadoc = require "luadoc.doclet.html"
 require "markdown"
 
 module("literate", package.seeall)
@@ -26,7 +27,8 @@ The table has following structure:
 *   doc\_blocks['code']
 --]]
 local doc_blocks = {}
-local functions = {}
+filename = ""
+functions = {}
 
 local last_docstring
 local last_stat
@@ -41,44 +43,50 @@ local function extractCodeNodes(ast)
     This function splits AST into LP documentation part and code part.
     Code part may also contain comments, such as API documentation or commented out code.
     --]]
-    for i,v in ipairs(ast) do
-        --^ `filter comments`
-        if v.key == "COMMENT" and v.parsed.style == "literate" then
-            if last_docstring ~= v.parsed.text then
-                table.insert(doc_blocks, { doc = "", code = ""})
-            end
-            if v.parsed.type == "lp" or v.parsed.type == "markdown" then
-                doc_blocks[#doc_blocks].doc = { str = v.parsed.text, type = v.parsed.type }
-            end
-        elseif v.key == "COMMENT" and v.parsed.style == "custom" then
-            if v.parsed.type == "startblock" then
-                table.insert(doc_blocks, { doc = { str = "<strong>"..v.parsed.block.."</strong><br/>"..v.parsed.text, type = v.parsed.type }, code = ""})
-            elseif v.parsed.type == "endblock" then
-                table.insert(doc_blocks, { doc = { str = "end of <strong>"..(v.parsed.block or "").."</strong> block", type = v.parsed.type }, code = ""})
-                table.insert(doc_blocks, { doc ={}, code = "" })
-            end
-        --v
-        elseif type(v) == "table" and #v > 0 then
-            if (v['key'] == "GlobalFunction" or v['key'] == "LocalFunction") and v.docstring then
-                table.insert(doc_blocks, { doc = "", code = ""})
-                last_stat = "FunctionDef"
-            elseif v['key'] == "FunctionCall" then
-                last_stat = "FunctionCall"
-            elseif v['key'] == "GlobalFunction" or v['key'] == "LocalFunction" then
-                last_stat = "FunctionDef"
-            end
-            extractCodeNodes(v)
-        else
-            if v['key'] == "ID" and last_stat == "FunctionCall" then
-                doc_blocks[#doc_blocks].code = doc_blocks[#doc_blocks].code .. "--[[|link "..v['str'].."|]]"..v['str'].."--[[||]]"
-                last_stat = nil
-            elseif v['key'] == "ID" and last_stat == "FunctionDef" then
-                doc_blocks[#doc_blocks].code = doc_blocks[#doc_blocks].code .. "--[[|anchor "..v['str'].."|]]"..v['str']
-                last_stat = nil
+
+    if #ast.data > 0 then
+        for i,v in ipairs(ast.data) do
+            --^ `filter comments`
+            if v.key == "COMMENT" and v.parsed.style == "literate" then
+                if last_docstring ~= v.parsed.text then
+                    table.insert(doc_blocks, { doc = "", code = {}})
+                end
+                if v.parsed.type == "lp" or v.parsed.type == "markdown" then
+                    doc_blocks[#doc_blocks].doc = { str = v.parsed.text, type = v.parsed.type }
+                end
+            elseif v.key == "COMMENT" and v.parsed.style == "custom" then
+                if v.parsed.type == "startblock" then
+                    table.insert(doc_blocks, { doc = { str = "<strong>"..v.parsed.block.."</strong><br/>"..v.parsed.text, type = v.parsed.type }, code = {}})
+                elseif v.parsed.type == "endblock" then
+                    table.insert(doc_blocks, { doc = { str = "end of <strong>"..(v.parsed.block or "").."</strong> block", type = v.parsed.type }, code = {}})
+                    table.insert(doc_blocks, { doc ={}, code = {} })
+                end
+            --v
+            elseif type(v.data) == "table" and #v.data > 0 then
+                if (v['key'] == "GlobalFunction" or v['key'] == "LocalFunction") and v.docstring then
+                    table.insert(doc_blocks, { doc = "", code = {}})
+                    table.insert(doc_blocks[#doc_blocks].code, '<a name="'..v['name']..'Xref"></a>')
+                    last_docstring = v.docstring
+                elseif v['key'] == "FunctionCall" then
+                    last_stat = "FunctionCall"
+                elseif v['key'] == "GlobalFunction" or v['key'] == "LocalFunction" then
+                    table.insert(doc_blocks[#doc_blocks].code, '<a name="'..v['name']..'Xref"></a>')
+                end
+                if v['key'] == "Stat" then last_stat = nil end
+                extractCodeNodes(v)
             else
-                doc_blocks[#doc_blocks].code = doc_blocks[#doc_blocks].code .. v['str']
+                if v['key'] == "ID" and last_stat == "FunctionCall" and functions[v.str] then
+                    table.insert(doc_blocks[#doc_blocks].code, '<a href="../'.. luadoc.file_link(functions[v.str].path,filename) ..'#'.. v['str'] ..'Xref" title="'.. (functions[v.str].docstring or "") ..'">')
+                    table.insert(doc_blocks[#doc_blocks].code, v)
+                    table.insert(doc_blocks[#doc_blocks].code, '</a>')
+                    last_stat = nil
+                else
+                    table.insert(doc_blocks[#doc_blocks].code, v)
+                end
             end
         end
+    else
+
     end
 end
 
@@ -98,22 +106,11 @@ local function block_comments_class()
     return class
 end
 
-local function replaceLinks(html)
-    local html = html
-    for k,v in pairs(functions) do
-        html = html:gsub('<span class="comment">%-%-%[%[%|link '..k..'%|%]%]</span>', '<a href="#'.. k ..'" title="'..(v.node.docstring or "")..'">')
-        html = html:gsub('<span class="comment">%-%-%[%[%|anchor '..k..'%|%]%]</span>', '<a name="'.. k ..'"></a>')
-    end
-    html = html:gsub('<span class="comment">%-%-%[%[%|%|%]%]</span>', '</a>')
-    html = html:gsub('<span class="comment">%-%-%[%[%|link [a-z]*%|%]%]</span>', '')
-    return html
-end
-
 local function ASTtoHTML(ast)
     local html
     local class
     extractCodeNodes(ast)
-    --dumpTree(ast)
+    util.dumpTree()
     --dumpTree(doc_blocks)
     html = "<table>"
     for _,v in ipairs(doc_blocks) do
@@ -134,7 +131,16 @@ local function ASTtoHTML(ast)
         html = html .. (v.doc.str or "")
         html = html .. '</td><td class="code">'
         html = html .. "<pre class=\"highlighted_code\">"
-        html = html .. lxsh.highlighters.lua(v.code, { formatter = lxsh.formatters.html, external = true })
+        for _,v in ipairs(v.code) do
+            if type(v) == "table" then
+                --html = html .. lxsh.highlighters.lua(v.code, { formatter = lxsh.formatters.html, external = true })
+                local tree = ast_helper.metrics_to_highlighter(v)
+                local text, tree = highlighter.highlight_text("",tree)
+                html = html .. highlighter.assemble_table(tree)
+            else
+                html = html .. v
+            end
+        end
         html = html .. "</pre>"
         html = html .. "</td></tr>"
 
@@ -143,33 +149,9 @@ local function ASTtoHTML(ast)
         end
     end
     html = html .. "</table>"
-    return replaceLinks(html)
-end
 
-local search_docstring = false
-local inline = ""
-
-local search_funcname = false
-local func_node
-------------------------------------------------------------------------
--- Function looking for comments and function definitions
--- @name findCommentsAndFunctions
--- @param ast - AST to extend
-local function findFunctions(ast)
-
-    for i,v in ipairs(ast) do
-        if v.key == "GlobalFunction" or v.key == "LocalFunction" then
-            search_funcname = true
-            func_node = v
-        elseif v.key == "Name" and search_funcname == true then
-            functions[v.str] = { node = func_node }
-            search_funcname = false
-        end
-
-        if #v > 0 then
-            findFunctions(v)
-        end
-    end
+    return html
+    --return replaceLinks(html)
 end
 
 ------------------------------------------------------------------------
@@ -179,31 +161,7 @@ end
 -- @param code - string containing the source code to be analyzed
 function literate(ast)
     doc_blocks = {}
-    findFunctions(ast)
-    --_ Reset doc_blocks table for each source file
-    table.insert(doc_blocks, { doc = "", code = "" })
+    --_ Reset doc_blocks table for each source fiastle
+    table.insert(doc_blocks, { doc = "", code = {} })
     return ASTtoHTML(ast)
-end
-
-function dumpTree(ast, depth)
-    --print("Node size: "..#ast)
-    if ast == nil then return nil end
-	if depth==nil then
-            depth = 0
-        end
-        
-        local indent = ""
-        for i=1,depth do
-            indent = indent .. "--"
-        end
-        for k,v in pairs(ast) do
-            if type(v)~="table" then
-                print(indent..k.." = "..v)
-            else
-                print(indent..k.." = ")
-                if k ~= "comment" then
-                    dumpTree(v,depth+1)
-                end
-            end
-        end
 end
