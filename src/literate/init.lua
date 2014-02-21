@@ -14,7 +14,7 @@ but has some interesting improvements.
 
 Block comments are used to comment wider part of code than just one line or loop.
 Comments are described by grammar and have following syntax:
-    
+
     --^ `name` description
         <code>
     --v `name`
@@ -59,12 +59,12 @@ This module directly depends on *luapretty* module, which it uses for syntax hig
 local highlighter = require "luapretty.highlighter"
 local ast_helper = require "luapretty.ast_helper"
 local util = require "literate.util"
-local luadoc = require "luadoc.doclet.html"
+local luadoc = require "luadocer.doclet.html"
 require "markdown"
 
 module("literate", package.seeall)
 
---[[# 
+--[[#
 *doc\_blocks* table contains split source file into documentation and code part.
 The table has following structure:
 
@@ -142,17 +142,17 @@ local function extractCodeNodes(ast)
                 if v.parsed.type == "startblock" then
                     table.insert(doc_blocks,
                         {
-                            doc = 
+                            doc =
                                 {
                                     str = "<strong>"..v.parsed.block.."</strong> block<br/>"..v.parsed.text,
                                     type = v.parsed.type
-                                }, 
+                                },
                             code = {}
                         })
                 elseif v.parsed.type == "endblock" then
                     table.insert(doc_blocks,
                         {
-                            doc = 
+                            doc =
                                 {
                                     str = "end of <strong>"..(v.parsed.block or "").."</strong> block",
                                     type = v.parsed.type

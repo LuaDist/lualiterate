@@ -11,5 +11,6 @@ maintainer = "Peter Kapec"
 
 depends = {
 	"lua ~> 5.1",
+	"markdown >= 0.32",
 	"leg = 0.1.3 ",	-- needs version 0.1.3 that supports LPeg 0.10
 }
